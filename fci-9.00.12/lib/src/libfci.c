@@ -360,7 +360,11 @@ static int __fci_cmd(FCI_CLIENT *this_client, unsigned short fcode, unsigned sho
 
 	nlh = (struct nlmsghdr *)hdr;
 
-	nlh->nlmsg_len = NLMSG_SPACE(sizeof(struct fci_hdr) + cmd_len);
+	/*
+	 * nlmsg_len describes bytes actually sent. Do not use NLMSG_SPACE()
+	 * unless the padding bytes are present in the iovec.
+	 */
+	nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct fci_hdr) + cmd_len);
 
 	 /* standard message type */
 	nlh->nlmsg_type = 0;
