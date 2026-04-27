@@ -249,7 +249,7 @@ static void fci_outbound_err(int nl_type, struct sk_buff *skb, u32 pid, struct n
 
 	errmsg = nlmsg_data(rep);
 	errmsg->error = err;
-	memcpy(&errmsg->msg, nlh, err ? nlh->nlmsg_len : sizeof(*nlh));
+	memcpy(&errmsg->msg, nlh, sizeof(*nlh));
 
 	NETLINK_CB(skb).portid = 0;	/* from kernel */
 
@@ -421,6 +421,12 @@ static int fci_outbound_fe_data(u16 fcode, u16 len, u16 *payload)
 
 	FCI_PRINTK(FCI_OUTBOUND, "\nFCI: fci_outbound_fe_data()\n");
 
+	if (len > FCI_MSG_MAX_PAYLOAD)
+		len = FCI_MSG_MAX_PAYLOAD;
+
+	if (len && !payload)
+		return -EINVAL;
+
 	skb = fci_alloc_msg();
 	if (!skb)
 	{
@@ -454,20 +460,53 @@ err:
  */
 static void __fci_fe_inbound_data(struct sk_buff *skb)
 {
-	struct nlmsghdr *nlh = (struct nlmsghdr *)skb->data;
+	struct nlmsghdr *nlh;
 	struct nlmsghdr *rep;
 	struct sk_buff *nskb;
 	FCI_MSG *fci_msg, *fci_rep;
+	int payload_len;
+	int actual_payload_len;
 	int rc;
 
 	FCI_PRINTK(FCI_INBOUND, "FCI: %s\n", __func__);
 
-	/* extract fci message from skb */
-	fci_msg = nlmsg_data(nlh);
-
 	this_fci->stats.rx_msg++;
 
 	this_fci->stats.sock_stats[FCI_NL_FF].rx_msg++;
+
+	if (skb->len < NLMSG_HDRLEN)
+	{
+		this_fci->stats.rx_msg_err++;
+		return;
+	}
+
+	nlh = nlmsg_hdr(skb);
+	if (!nlmsg_ok(nlh, skb->len))
+	{
+		nskb = fci_alloc_msg();
+		if (nskb)
+			fci_outbound_err(FCI_NL_FF, nskb, NETLINK_CB(skb).portid,
+					nlh, -EINVAL);
+		this_fci->stats.rx_msg_err++;
+		return;
+	}
+
+	payload_len = nlmsg_len(nlh);
+	rc = 0;
+	if (payload_len < FCI_MSG_HDR_SIZE)
+		rc = -EINVAL;
+	else if (payload_len > FCI_MSG_SIZE)
+		rc = -EMSGSIZE;
+	else
+	{
+		/* extract fci message from skb */
+		fci_msg = nlmsg_data(nlh);
+		actual_payload_len = payload_len - FCI_MSG_HDR_SIZE;
+		if (fci_msg->length > FCI_MSG_MAX_PAYLOAD)
+			rc = -EMSGSIZE;
+		else if (fci_msg->length > actual_payload_len)
+			rc = -EINVAL;
+	}
 
 	nskb = fci_alloc_msg();
 	if (nskb)
@@ -477,7 +516,8 @@ static void __fci_fe_inbound_data(struct sk_buff *skb)
 		fci_rep = nlmsg_data(rep);
 
 		/* Process command received from User Space */
-		rc = fci_fe_inbound_parser(fci_msg, fci_rep);
+		if (!rc)
+			rc = fci_fe_inbound_parser(fci_msg, fci_rep);
 		if (rc < 0)
 		{
 			nlmsg_cancel(nskb, rep);
@@ -537,7 +577,7 @@ static int fci_fe_inbound_parser(FCI_MSG *fci_msg, FCI_MSG *fci_rep)
 	FCI_PRINTK(FCI_INBOUND, "FCI: fci_fe_inbound_parser()\n");
 
 	fci_rep->length = 0;
-	rc = comcerto_fpp_send_command(fci_msg->fcode, fci_msg->length, fci_msg->payload, &fci_rep->length, fci_rep->payload);
+	rc = comcerto_fpp_send_command(fci_msg->fcode, fci_msg->length, fci_msg->payload, &fci_rep->length, fci_rep->payload, FCI_MSG_MAX_PAYLOAD);
 
 	if (fci_rep->length > FCI_MSG_MAX_PAYLOAD)
 		fci_rep->length = FCI_MSG_MAX_PAYLOAD;

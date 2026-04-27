@@ -18,7 +18,7 @@
 */
 
 /* FPP Forward Engine API*/
-extern int comcerto_fpp_send_command(unsigned short fcode, unsigned short length, unsigned short *payload, unsigned short *, unsigned short *);
+extern int comcerto_fpp_send_command(unsigned short fcode, unsigned short length, unsigned short *payload, unsigned short *, unsigned short *, unsigned short);
 extern int comcerto_fpp_register_event_cb(void *cb);
 
 /*
