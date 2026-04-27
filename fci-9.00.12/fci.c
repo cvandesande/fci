@@ -385,12 +385,12 @@ static void fci_fe_unregister(void)
  * fci_alloc_msg - allocates a skb suitable for containing a FCI netlink message
  *
  */
-static struct sk_buff *fci_alloc_msg(void)
+static struct sk_buff *fci_alloc_msg_size(size_t len)
 {
 	struct sk_buff *skb;
 	gfp_t flags = in_interrupt() ? GFP_ATOMIC : GFP_KERNEL;
 
-	skb = nlmsg_new(FCI_MSG_SIZE, flags);
+	skb = nlmsg_new(len, flags);
 	if (!skb)
 	{
 		printk(KERN_ERR "FCI: nlmsg_new() failed\n");
@@ -404,6 +404,11 @@ static struct sk_buff *fci_alloc_msg(void)
 
 err:
 	return NULL;
+}
+
+static struct sk_buff *fci_alloc_msg(void)
+{
+	return fci_alloc_msg_size(FCI_MSG_SIZE);
 }
 
 /*
@@ -463,7 +468,9 @@ static void __fci_fe_inbound_data(struct sk_buff *skb)
 	struct nlmsghdr *nlh;
 	struct nlmsghdr *rep;
 	struct sk_buff *nskb;
-	FCI_MSG *fci_msg, *fci_rep;
+	FCI_MSG *fci_msg = NULL;
+	FCI_MSG *fci_rep;
+	FCI_MSG fci_rep_local;
 	int payload_len;
 	int actual_payload_len;
 	int rc;
@@ -508,44 +515,41 @@ static void __fci_fe_inbound_data(struct sk_buff *skb)
 			rc = -EINVAL;
 	}
 
-	nskb = fci_alloc_msg();
-	if (nskb)
+	memset(&fci_rep_local, 0, sizeof(fci_rep_local));
+
+	/* Process command received from User Space */
+	if (!rc)
+		rc = fci_fe_inbound_parser(fci_msg, &fci_rep_local);
+
+	if (rc < 0)
 	{
-		rep = nlmsg_put(nskb, NETLINK_CB(skb).portid, nlh->nlmsg_seq, 0, 0, 0);
-
-		fci_rep = nlmsg_data(rep);
-
-		/* Process command received from User Space */
-		if (!rc)
-			rc = fci_fe_inbound_parser(fci_msg, fci_rep);
-		if (rc < 0)
-		{
-			nlmsg_cancel(nskb, rep);
+		nskb = fci_alloc_msg();
+		if (nskb)
 			fci_outbound_err(FCI_NL_FF, nskb, NETLINK_CB(skb).portid, nlh, rc);
-			this_fci->stats.rx_msg_err++;
-		}
-		else
-		{
-			skb_put(nskb, FCI_MSG_HDR_SIZE + fci_rep->length);
-			nlmsg_end(nskb, rep);
-			fci_outbound_unicast(FCI_NL_FF, nskb, NETLINK_CB(skb).portid);
-		}
+		this_fci->stats.rx_msg_err++;
 	}
 	else
 	{
-#if 0 /* FIXME netlink_lookup is not exported */
-		struct sock *sk;
-
-		sk = netlink_lookup(sock_net(skb->sk),
-				skb->sk->sk_protocol,
-				NETLINK_CB(skb).pid);
-		if (sk) {
-			sk->sk_err = ENOBUFS;
-			sk->sk_error_report(sk);
-			sock_put(sk);
+		nskb = fci_alloc_msg_size(FCI_MSG_HDR_SIZE + fci_rep_local.length);
+		if (nskb)
+		{
+			rep = nlmsg_put(nskb, NETLINK_CB(skb).portid, nlh->nlmsg_seq,
+					0, FCI_MSG_HDR_SIZE + fci_rep_local.length, 0);
+			if (!rep)
+			{
+				kfree_skb(nskb);
+				this_fci->stats.rx_msg_err++;
+				return;
+			}
+			fci_rep = nlmsg_data(rep);
+			memcpy(fci_rep, &fci_rep_local, FCI_MSG_HDR_SIZE + fci_rep_local.length);
+			nlmsg_end(nskb, rep);
+			fci_outbound_unicast(FCI_NL_FF, nskb, NETLINK_CB(skb).portid);
 		}
-#endif
-		this_fci->stats.rx_msg_err++;
+		else
+		{
+			this_fci->stats.rx_msg_err++;
+		}
 	}
 }
 
