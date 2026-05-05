@@ -287,19 +287,28 @@ static struct fci_hdr *fci_check_msg(unsigned char *hdr, int len)
 {
 	struct nlmsghdr *nlh;
 	struct fci_hdr *fh;
+	unsigned int nlh_len;
 
 	/* get fci message within the reveived buffer */
 	nlh = (struct nlmsghdr *)hdr;
+	nlh_len = (len >= (int)sizeof(*nlh)) ? nlh->nlmsg_len : 0;
 
 	if (!NLMSG_OK(nlh, len))
 	{
-		FCILIB_PRINTF(FCILIB_ERR, "LIBFCI: %s() netlink message not ok %d %zu %d\n", __func__, len, sizeof(struct nlmsghdr), nlh->nlmsg_len);
+		FCILIB_PRINTF(FCILIB_ERR, "LIBFCI: %s() netlink message not ok %d %zu %u\n", __func__, len, sizeof(struct nlmsghdr), nlh_len);
 		goto err;
 	}
 
 	if (nlh->nlmsg_type == NLMSG_ERROR)
 	{
 		struct nlmsgerr *err = NLMSG_DATA(nlh);
+
+		if (NLMSG_PAYLOAD(nlh, 0) < sizeof(*err))
+		{
+			FCILIB_PRINTF(FCILIB_ERR, "LIBFCI: %s() netlink error message too short(%d)\n", __func__, len);
+			goto err;
+		}
+
 		errno = -err->error;
 		goto err;
 	}
